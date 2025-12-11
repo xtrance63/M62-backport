@@ -1,0 +1,68 @@
+name: Build ExtremeKernel KSU
+
+on: [workflow_dispatch, push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # use the models from your provided case mapping
+        target: [beyond0lte, beyond1lte, beyond2lte, beyondx, d1, d1xks, d2s, d2x, d2xks]
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+        with:
+          submodules: 'recursive'
+
+      - name: Set up the environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev \
+          libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig cpio
+
+      - name: Determine Suffix (S10 / N10)
+        id: get-suffix
+        run: |
+          # If SUFFIX is explicitly provided via env, use it.
+          if [ -n "${SUFFIX:-}" ]; then
+            echo "suffix=${SUFFIX}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Use the matrix target name to determine suffix.
+          MODEL_NAME="${{ matrix.target }}"
+
+          # Models mapped to N10 (exynos9825 family)
+          case "$MODEL_NAME" in
+            d1|d1xks|d2s|d2x|d2xks)
+              echo "suffix=N10" >> $GITHUB_OUTPUT
+              ;;
+            # All other models from the list are exynos9820-based -> S10
+            *)
+              echo "suffix=S10" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Get SusFS version
+        id: get-version
+        run: |
+          if [ -x ./build/find_susfs_version.sh ]; then
+            SUSFS_VERSION=$(./build/find_susfs_version.sh out)
+          else
+            SUSFS_VERSION="v0.0.0"
+          fi
+          echo "susfs_version=$SUSFS_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build kernel
+        run: |
+          ./build.sh -m ${{ matrix.target }} -k y -r n -d n
+
+      - name: Upload Kernel Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: "ExtremeKRNL-${{ steps.get-suffix.outputs.suffix }}-${{ matrix.target }}-RKSU-SusFS-${{ steps.get-version.outputs.susfs_version }}"
+          path: build/out/${{ matrix.target }}/zip
