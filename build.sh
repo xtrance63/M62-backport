@@ -228,30 +228,76 @@ if [ -z "$RECOVERY" ]; then
     echo "Building zip..."
     echo "-----------------------------------------------"
     cp build/out/$MODEL/boot.img build/out/$MODEL/zip/files/boot.img
-    cp build/out/$MODEL/dtb.img build/out/$MODEL/zip/files/dtb.img
-    cp build/out/$MODEL/dtbo.img build/out/$MODEL/zip/files/dtbo.img
+    # copy dtb and dtbo only if they exist
+    if [ -f build/out/$MODEL/dtb.img ]; then
+        cp build/out/$MODEL/dtb.img build/out/$MODEL/zip/files/dtb.img
+    fi
+    if [ -f build/out/$MODEL/dtbo.img ]; then
+        cp build/out/$MODEL/dtbo.img build/out/$MODEL/zip/files/dtbo.img
+    fi
     cp build/update-binary build/out/$MODEL/zip/META-INF/com/google/android/update-binary
     cp build/updater-script build/out/$MODEL/zip/META-INF/com/google/android/updater-script
 
-    version=$(grep -o 'CONFIG_LOCALVERSION="[^"]*"' arch/arm64/configs/exynos9820_defconfig | cut -d '"' -f 2)
-
-    version=${version:1}
-
-    if [ "$SOC" == "exynos9825" ]; then
-        version="${version}-N10"
-    else
-        version="${version}-S10"
+    # ---------------------------
+    # Determine kernel localversion
+    # ---------------------------
+    # Prefer out/.config; fall back to the defconfig file if present.
+    kernel_localversion=""
+    if [ -f out/.config ]; then
+        kernel_localversion=$(grep -o 'CONFIG_LOCALVERSION="[^"]*"' out/.config 2>/dev/null | cut -d '"' -f 2)
+    fi
+    if [ -z "$kernel_localversion" ] && [ -f "arch/arm64/configs/${KERNEL_DEFCONFIG:-}" ]; then
+        kernel_localversion=$(grep -o 'CONFIG_LOCALVERSION="[^"]*"' arch/arm64/configs/${KERNEL_DEFCONFIG} 2>/dev/null | cut -d '"' -f 2)
+    fi
+    kernel_localversion=${kernel_localversion#_}
+    if [ -z "$kernel_localversion" ]; then
+        kernel_localversion="ExtremeKRNL"
     fi
 
+    # ---------------------------
+    # Obtain SusFS version
+    # ---------------------------
+    # Use helper script if available; fallback to v0.0.0.
+    if [ -x ./build/find_susfs_version.sh ]; then
+        SUSFS_VERSION=$(./build/find_susfs_version.sh out)
+    else
+        SUSFS_VERSION="v0.0.0"
+    fi
+
+    # ---------------------------
+    # Determine Suffix (S10 vs N10)
+    # ---------------------------
+    # Priority: SUFFIX env var (explicit) -> SOC mapping -> default to S10.
+    if [ -n "${SUFFIX:-}" ]; then
+        SUF="${SUFFIX}"
+    else
+        case "$SOC" in
+            *9825*|*9835*|exynos9825)
+                SUF="N10"
+                ;;
+            *)
+                SUF="S10"
+                ;;
+        esac
+    fi
+
+    PREFIX="ExtremeKRNL-${SUF}"
+
+    # ---------------------------
+    # Compose filename and create archive
+    # ---------------------------
     pushd build/out/$MODEL/zip > /dev/null
-    DATE=`date +"%d-%m-%Y_%H-%M-%S"`    
 
     if [[ "$KSU_OPTION" == "y" ]]; then
-        NAME="$version"_"$MODEL"_UNOFFICIAL_KSU_"$DATE".zip
+        # Example: ExtremeKRNL-S10_beyond1lte_RKSU-SusFS_v2.0.0.zip
+        NAME="${PREFIX}_${MODEL}_RKSU-SusFS_${SUSFS_VERSION}.zip"
     else
-        NAME="$version"_"$MODEL"_UNOFFICIAL_"$DATE".zip
+        # Example: ExtremeKRNL-S10_beyond1lte_ExtremeKRNL.zip
+        NAME="${PREFIX}_${MODEL}_${kernel_localversion}.zip"
     fi
-    zip -r ../"$NAME" .
+
+    echo "Creating archive: $NAME"
+    zip -r -qq ../"$NAME" .
     popd > /dev/null
 fi
 
