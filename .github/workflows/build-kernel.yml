@@ -1,51 +1,24 @@
 name: Build ExtremeKernel KSU
 
-on: [workflow_dispatch, push]
+on:
+  # Manual trigger (build only, no release)
+  workflow_dispatch:
+
+  # Trigger on push (you can later restrict to tags if needed)
+  push:
 
 jobs:
-  build:
+  prepare:
+    name: Prepare metadata
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        # use the models from your provided case mapping
-        target: [beyond0lte, beyond1lte, beyond2lte, beyondx, d1, d1xks, d2s, d2x, d2xks]
+    outputs:
+      susfs_version: ${{ steps.get-version.outputs.susfs_version }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5
         with:
-          submodules: 'recursive'
-
-      - name: Set up the environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev \
-          libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig cpio
-
-      - name: Determine Suffix (S10 / N10)
-        id: get-suffix
-        run: |
-          # If SUFFIX is explicitly provided via env, use it.
-          if [ -n "${SUFFIX:-}" ]; then
-            echo "suffix=${SUFFIX}" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Use the matrix target name to determine suffix.
-          MODEL_NAME="${{ matrix.target }}"
-
-          # Models mapped to N10 (exynos9825 family)
-          case "$MODEL_NAME" in
-            d1|d1xks|d2s|d2x|d2xks)
-              echo "suffix=N10" >> $GITHUB_OUTPUT
-              ;;
-            # All other models from the list are exynos9820-based -> S10
-            *)
-              echo "suffix=S10" >> $GITHUB_OUTPUT
-              ;;
-          esac
+          submodules: recursive
 
       - name: Get SusFS version
         id: get-version
@@ -57,12 +30,65 @@ jobs:
           fi
           echo "susfs_version=$SUSFS_VERSION" >> $GITHUB_OUTPUT
 
+  build:
+    name: Build kernel (matrix)
+    needs: prepare
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - beyond0lte
+          - beyond1lte
+          - beyond2lte
+          - beyondx
+          - d1
+          - d1xks
+          - d2s
+          - d2x
+          - d2xks
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up the environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git-core gnupg flex bison build-essential zip curl \
+            zlib1g-dev libc6-dev-i386 x11proto-core-dev \
+            libx11-dev lib32z1-dev libgl1-mesa-dev \
+            libxml2-utils xsltproc unzip fontconfig cpio
+
+      - name: Determine device suffix (S10 / N10)
+        id: get-suffix
+        run: |
+          MODEL_NAME="${{ matrix.target }}"
+
+          case "$MODEL_NAME" in
+            d1|d1xks|d2s|d2x|d2xks)
+              echo "suffix=N10" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "suffix=S10" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
       - name: Build kernel
         run: |
           ./build.sh -m ${{ matrix.target }} -k y -r n
 
-      - name: Upload Kernel Artifacts
+      - name: Package kernel zip
+        run: |
+          cd build/out/${{ matrix.target }}/zip
+          zip -r ../../ExtremeKRNL-${{ steps.get-suffix.outputs.suffix }}-${{ matrix.target }}.zip .
+
+      - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: "ExtremeKRNL-${{ steps.get-suffix.outputs.suffix }}-${{ matrix.target }}-RKSU-SusFS-${{ steps.get-version.outputs.susfs_version }}"
-          path: build/out/${{ matrix.target }}/zip
+          name: ExtremeKRNL-${{ steps.get-suffix.outputs.suffix }}-${{ matrix.target }}-${{ github.run_id }}
+          path: build/out/ExtremeKRNL-${{ steps.get-suffix.outputs.suffix }}-${{ matrix.target }}.zip
