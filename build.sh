@@ -15,8 +15,8 @@ unset_flags()
 Usage: $(basename "$0") [options]
 Options:
     -m, --model [value]     Specify the model code of the phone
-    -k, --ksu [Y/n]         Include KernelSU
-    -r, --recovery [y/N]    Compile kernel for an Android Recovery
+    -k, --ksu [y/n]         Include KernelSU
+    -r, --recovery [y/n]    Compile kernel for an Android Recovery
 EOF
 }
 
@@ -128,7 +128,7 @@ if [[ "$RECOVERY_OPTION" == "y" ]]; then
 fi
 
 if [ -z $KSU_OPTION ]; then
-    read -p "Include KernelSU (y/N): " KSU_OPTION
+    read -p "Include KernelSU (y/n): " KSU_OPTION
 fi
 
 if [[ "$KSU_OPTION" == "y" ]]; then
@@ -150,9 +150,9 @@ else
 fi
 
 if [ -z "$RECOVERY" ]; then
-    echo "Recovery: N"
+    echo "Recovery: n"
 else
-    echo "Recovery: Y"
+    echo "Recovery: y"
 fi
 
 echo "-----------------------------------------------"
