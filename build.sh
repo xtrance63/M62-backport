@@ -2,11 +2,10 @@
 
 abort()
 {
-    cd -
     echo "-----------------------------------------------"
     echo "Kernel compilation failed! Exiting..."
     echo "-----------------------------------------------"
-    exit -1
+    exit 1
 }
 
 unset_flags()
@@ -15,8 +14,9 @@ unset_flags()
 Usage: $(basename "$0") [options]
 Options:
     -m, --model [value]     Specify the model code of the phone
-    -k, --ksu [y/n]         Include KernelSU
-    -r, --recovery [y/n]    Compile kernel for an Android Recovery
+    -k, --ksu [Y/n]         Include KernelSU
+    -s, --susfs [y/N]       Include SuSFS
+    -r, --recovery [y/N]    Compile kernel for an Android Recovery
 EOF
 }
 
@@ -30,6 +30,10 @@ while [[ $# -gt 0 ]]; do
             KSU_OPTION="$2"
             shift 2
             ;;
+        --susfs|-s)
+            SUSFS_OPTION="$2"
+            shift 2
+            ;;
         --recovery|-r)
             RECOVERY_OPTION="$2"
             shift 2
@@ -41,10 +45,59 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+fetch_ksu() {
+    echo "Fetching KernelSU submodule"
+    git submodule update --init --recursive || {
+        echo "Failed to initialize KernelSU submodule!"
+        exit 1
+    }
+}
+
+if [ "$KSU_OPTION" == "y" ]; then
+    fetch_ksu
+
+    if [ "$SUSFS_OPTION" == "y" ]; then
+        KSU_BRANCH="susfs-rksu-master"
+    else
+        KSU_BRANCH="main"
+    fi
+
+    echo "[*] Switching KernelSU to branch: $KSU_BRANCH"
+
+	cd KernelSU || abort
+	
+	echo "[*] Fetching all remote refs for KernelSU"
+	git fetch --all --prune || abort
+	
+	echo "[*] Available remote branches:"
+	git branch -r
+	
+	if git show-ref --verify --quiet "refs/remotes/origin/$KSU_BRANCH"; then
+	    git checkout -B "$KSU_BRANCH" "origin/$KSU_BRANCH" || abort
+	else
+	    echo "KernelSU remote branch '$KSU_BRANCH' not found after full fetch!"
+	    abort
+	fi
+	
+	cd ..
+	
+	# Ensure drivers/kernelsu symlink points to KernelSU/kernel
+	echo "[*] Setting up drivers/kernelsu symlink"
+	if [ -L "drivers/kernelsu" ] || [ -e "drivers/kernelsu" ]; then
+	    rm -rf drivers/kernelsu
+	fi
+	ln -sf ../KernelSU/kernel drivers/kernelsu
+fi
+
 echo "Preparing the build environment..."
 
 pushd $(dirname "$0") > /dev/null
 CORES=`cat /proc/cpuinfo | grep -c processor`
+
+if [[ "$KSU_OPTION" != "y" ]]; then
+    echo "[*] Vanilla build: cleaning out/"
+    rm -rf out
+fi
 
 # Define toolchain variables
 CLANG_DIR=$PWD/toolchain/neutron_18
@@ -68,12 +121,12 @@ if [ ! -f "$CLANG_DIR/bin/clang-18" ]; then
     popd > /dev/null
 fi
 
-MAKE_ARGS="
-LLVM=1 \
-LLVM_IAS=1 \
-ARCH=arm64 \
+MAKE_ARGS=(
+LLVM=1
+LLVM_IAS=1
+ARCH=arm64
 O=out
-"
+)
 
 # Define specific variables
 case $MODEL in
@@ -127,8 +180,8 @@ if [[ "$RECOVERY_OPTION" == "y" ]]; then
     KSU_OPTION=n
 fi
 
-if [ -z $KSU_OPTION ]; then
-    read -p "Include KernelSU (y/n): " KSU_OPTION
+if [ -z "$KSU_OPTION" ]; then
+    read -p "Include KernelSU (y/N): " KSU_OPTION
 fi
 
 if [[ "$KSU_OPTION" == "y" ]]; then
@@ -139,31 +192,60 @@ rm -rf build/out/$MODEL
 mkdir -p build/out/$MODEL/zip/files
 mkdir -p build/out/$MODEL/zip/META-INF/com/google/android
 
+# Handle KernelSU Kconfig for Vanilla builds
+if [[ "$KSU_OPTION" != "y" ]]; then
+    echo "[*] Creating placeholder KernelSU Kconfig for Vanilla build"
+    # Remove the symlink if it exists
+    if [ -L "drivers/kernelsu" ] || [ -e "drivers/kernelsu" ]; then
+        rm -rf drivers/kernelsu
+    fi
+    # Create real directory and Kconfig file
+    mkdir -p drivers/kernelsu
+    echo "# Placeholder Kconfig for Vanilla build (KernelSU disabled)" > drivers/kernelsu/Kconfig
+fi
+
 # Build kernel image
 echo "-----------------------------------------------"
-echo "Defconfig: "$KERNEL_DEFCONFIG""
-
 if [ -z "$KSU" ]; then
-    echo "KSU: No"
+    echo "KSU: N"
 else
-    echo "KSU: Yes"
+    echo "KSU: ${KSU_OPTION^^}"
 fi
-
-if [ -z "$RECOVERY" ]; then
-    echo "Recovery: n"
+if [[ "$SUSFS_OPTION" == "y" ]]; then
+    echo "KernelSU branch: susfs-rksu-master"
 else
-    echo "Recovery: y"
+    echo "KernelSU branch: main"
+fi
+if [ -z "$RECOVERY" ]; then
+    echo "Recovery: N"
+else
+    echo "Recovery: Y"
 fi
 
 echo "-----------------------------------------------"
-echo "Building kernel using "$KERNEL_DEFCONFIG""
 echo "Generating configuration file..."
 echo "-----------------------------------------------"
-make ${MAKE_ARGS} -j$CORES exynos9820_defconfig $MODEL.config $KSU $RECOVERY || abort
+make ${MAKE_ARGS[@]} -j$CORES exynos9820_defconfig $MODEL.config $KSU $RECOVERY || abort
+
+# Force KernelSU config
+if [ ! -x scripts/config ]; then
+    echo "[*] Building scripts/config"
+    make "${MAKE_ARGS[@]}" scripts || abort
+fi
+if [[ "$KSU_OPTION" == "y" ]]; then
+    echo "[*] Enabling KernelSU"
+    scripts/config --file out/.config --enable CONFIG_KSU
+else
+    echo "[*] Disabling KernelSU"
+    scripts/config --file out/.config --disable CONFIG_KSU
+fi
+make "${MAKE_ARGS[@]}" -j"$CORES" olddefconfig || abort
+echo "[*] Final KSU config state:"
+grep -E '^CONFIG_KSU=' out/.config || echo "CONFIG_KSU is not set"
 
 echo "Building kernel..."
 echo "-----------------------------------------------"
-make ${MAKE_ARGS} -j$CORES || abort
+make ${MAKE_ARGS[@]} -j$CORES || abort
 
 # Define constant variables
 KERNEL_PATH=build/out/$MODEL/Image
@@ -228,76 +310,32 @@ if [ -z "$RECOVERY" ]; then
     echo "Building zip..."
     echo "-----------------------------------------------"
     cp build/out/$MODEL/boot.img build/out/$MODEL/zip/files/boot.img
-    # copy dtb and dtbo only if they exist
-    if [ -f build/out/$MODEL/dtb.img ]; then
-        cp build/out/$MODEL/dtb.img build/out/$MODEL/zip/files/dtb.img
-    fi
-    if [ -f build/out/$MODEL/dtbo.img ]; then
-        cp build/out/$MODEL/dtbo.img build/out/$MODEL/zip/files/dtbo.img
-    fi
+    cp build/out/$MODEL/dtb.img build/out/$MODEL/zip/files/dtb.img
+    cp build/out/$MODEL/dtbo.img build/out/$MODEL/zip/files/dtbo.img
     cp build/update-binary build/out/$MODEL/zip/META-INF/com/google/android/update-binary
     cp build/updater-script build/out/$MODEL/zip/META-INF/com/google/android/updater-script
 
-    # ---------------------------
-    # Determine kernel localversion
-    # ---------------------------
-    # Prefer out/.config; fall back to the defconfig file if present.
-    kernel_localversion=""
-    if [ -f out/.config ]; then
-        kernel_localversion=$(grep -o 'CONFIG_LOCALVERSION="[^"]*"' out/.config 2>/dev/null | cut -d '"' -f 2)
-    fi
-    if [ -z "$kernel_localversion" ] && [ -f "arch/arm64/configs/${KERNEL_DEFCONFIG:-}" ]; then
-        kernel_localversion=$(grep -o 'CONFIG_LOCALVERSION="[^"]*"' arch/arm64/configs/${KERNEL_DEFCONFIG} 2>/dev/null | cut -d '"' -f 2)
-    fi
-    kernel_localversion=${kernel_localversion#_}
-    if [ -z "$kernel_localversion" ]; then
-        kernel_localversion="ExtremeKRNL"
-    fi
+    version=$(grep -o 'CONFIG_LOCALVERSION="[^"]*"' arch/arm64/configs/exynos9820_defconfig | cut -d '"' -f 2)
 
-    # ---------------------------
-    # Obtain SusFS version
-    # ---------------------------
-    # Use helper script if available; fallback to v0.0.0.
-    if [ -x ./build/find_susfs_version.sh ]; then
-        SUSFS_VERSION=$(./build/find_susfs_version.sh out)
+    version=${version:1}
+
+    if [ "$SOC" == "exynos9825" ]; then
+        version="${version}-N10"
     else
-        SUSFS_VERSION="v0.0.0"
+        version="${version}-S10"
     fi
 
-    # ---------------------------
-    # Determine Suffix (S10 vs N10)
-    # ---------------------------
-    # Priority: SUFFIX env var (explicit) -> SOC mapping -> default to S10.
-    if [ -n "${SUFFIX:-}" ]; then
-        SUF="${SUFFIX}"
-    else
-        case "$SOC" in
-            *9825*|*9835*|exynos9825)
-                SUF="N10"
-                ;;
-            *)
-                SUF="S10"
-                ;;
-        esac
-    fi
-
-    PREFIX="ExtremeKRNL-${SUF}"
-
-    # ---------------------------
-    # Compose filename and create archive
-    # ---------------------------
     pushd build/out/$MODEL/zip > /dev/null
+    DATE=`date +"%d-%m-%Y_%H-%M-%S"`    
 
-    if [[ "$KSU_OPTION" == "y" ]]; then
-        # Example: ExtremeKRNL-S10_beyond1lte_RKSU-SusFS_v2.0.0.zip
-        NAME="${PREFIX}_${MODEL}_RKSU-SusFS_${SUSFS_VERSION}.zip"
+    if [[ "$KSU_OPTION" == "y" && "$SUSFS_OPTION" == "y" ]]; then
+        NAME="${version}_${MODEL}_RKSU_SUSFS_OFFICIAL_${DATE}.zip"
+    elif [[ "$KSU_OPTION" == "y" ]]; then
+        NAME="${version}_${MODEL}_RKSU_OFFICIAL_${DATE}.zip"
     else
-        # Example: ExtremeKRNL-S10_beyond1lte_ExtremeKRNL.zip
-        NAME="${PREFIX}_${MODEL}_${kernel_localversion}.zip"
+        NAME="${version}_${MODEL}_VANILLA_OFFICIAL_${DATE}.zip"
     fi
-
-    echo "Creating archive: $NAME"
-    zip -r -qq ../"$NAME" .
+    zip -r ../"$NAME" .
     popd > /dev/null
 fi
 

@@ -7,6 +7,8 @@
 # command after changing this file, to see if there are
 # any tracked files which get ignored after the change.
 #
+
+#
 # Normal rules (sorted alphabetically)
 #
 .*
@@ -78,6 +80,13 @@ modules.builtin
 !.cocciconfig
 
 #
+# Allow GitHub Actions
+#
+!.github/
+!.github/workflows/
+!.github/workflows/**
+
+#
 # Generated include files
 #
 include/config
@@ -124,3 +133,10 @@ all.config
 
 # fetched Android config fragments
 kernel/configs/android-*.cfg
+
+#
+# Kernel build outputs (local only)
+#
+/out/
+/build/out/
+/toolchain/neutron_18/
