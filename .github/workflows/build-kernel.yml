@@ -15,7 +15,7 @@ jobs:
     strategy:  
       fail-fast: false
       matrix:
-        model: [beyond0lte, beyond1lte, beyond2lte, beyondx, d1, d1x,d1xks, d2s, d2x, d2xks]
+        model: [beyond0lte, beyond1lte, beyond2lte, beyondx, d1, d1xks, d2s, d2x, d2xks]
         variant: [ksu, susfs, vanilla]
 
     steps: 
@@ -57,11 +57,24 @@ jobs:
           chmod +x ./build.sh
           ./build.sh -m ${{ matrix.model }} ${{ steps.vars.outputs.FLAGS }}
 
-      # (5) Extract and prepare artifact
+      # (5) Resolve output model (handle aliases like d2xks -> d2x)
+      - name: Resolve output model
+        id: outmodel
+        run: |
+          case "${{ matrix.model }}" in
+            d2xks)
+              echo "model=d2x" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "model=${{ matrix.model }}" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      # (6) Extract and prepare artifact
       - name:  Prepare artifact
         id: artifact_name
         run: |
-          ZIP_FILE=$(ls build/out/${{ matrix.model }}/*.zip | head -n 1)
+          ZIP_FILE=$(ls build/out/$OUT_MODEL/*.zip | head -n 1)
           ARTIFACT_NAME=$(basename "$ZIP_FILE" .zip)
           
           # Unzip to a temporary directory
@@ -71,7 +84,7 @@ jobs:
           echo "name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
           echo "Prepared artifact: $ARTIFACT_NAME"
 
-      # (6) Upload kernel artifact
+      # (7) Upload kernel artifact
       - name: Upload kernel artifact
         uses:  actions/upload-artifact@v4
         with:
@@ -107,7 +120,6 @@ jobs:
           - Galaxy S10+ (beyond2lte)
           - Galaxy S10 5G (beyondx)
           - Galaxy Note10 (d1)
-          - Galaxy Note10 5G (d1x)
           - Galaxy Note10 5G Korea (d1xks)
           - Galaxy Note10+ (d2s)
           - Galaxy Note10+ 5G (d2x)
@@ -121,7 +133,7 @@ jobs:
 
           Build Notes
           - Built via GitHub Actions
-          - Total builds: 30 (10 models x 3 variants)
+          - Total builds: 27 (9 models x 3 variants)
           EOF
 
       - name:  Repackage for release
