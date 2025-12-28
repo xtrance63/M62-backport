@@ -71,18 +71,25 @@ jobs:
           esac
 
       # (6) Extract and prepare artifact
-      - name:  Prepare artifact
+      - name: Prepare artifact
         id: artifact_name
         run: |
+          OUT_MODEL="${{ steps.outmodel.outputs.model }}"
+          echo "Using output model: $OUT_MODEL"
+
           ZIP_FILE=$(ls build/out/$OUT_MODEL/*.zip | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "No zip found in build/out/$OUT_MODEL"
+            exit 1
+          fi
+
           ARTIFACT_NAME=$(basename "$ZIP_FILE" .zip)
-          
-          # Unzip to a temporary directory
+
           mkdir -p "artifact-content/$ARTIFACT_NAME"
           unzip -q "$ZIP_FILE" -d "artifact-content/$ARTIFACT_NAME"
           
           echo "name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
-          echo "Prepared artifact: $ARTIFACT_NAME"
 
       # (7) Upload kernel artifact
       - name: Upload kernel artifact
